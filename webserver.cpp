@@ -4,18 +4,13 @@
 #include <map>
 #include "esp_http_server.h"
 #include "esp_event.h"
-#include "nvsstorage.h"
-#include "nvs.h"
-#include "timeman.h"
 #include "sdkconfig.h"
 #include "pp.h"
 #include "webserver.h"
 #include "math.h"
 #include "ethernet.h"
-#include "discovery.h"
 #include "esp_spiffs.h"
 #include "cjson.h"
-#include "esp_system_web.h"
 
 #define MIN(a, b) ((a) > (b) ? (b) : (a))
 #define RECV_BUFFER_SIZE 1024
@@ -39,6 +34,9 @@ static int open_sockets = 0;
 static std::map<int32_t, pp_webclient_t> subscribtion_web;
 static pp_evloop_t myloop;
 static esp_event_base_t EV_BASE = "WEBSERVER_BASE";
+
+extern esp_err_t get_handler(httpd_req_t *req);
+
 /*
 static void print_web_clients(httpd_req_t *req, char *buf, size_t bufsize)
 {
@@ -256,12 +254,6 @@ bool socket_block(int fd, bool blocking)
     return (fcntl(fd, F_SETFL, flags) == 0) ? true : false;
 }
 
-esp_err_t get_handler(httpd_req_t *req)
-{
-    espsw_print_system_page();
-    return ESP_OK;
-}
-
 esp_err_t get_web(httpd_req_t *req)
 {
     int read = 0;
@@ -285,26 +277,29 @@ esp_err_t get_web(httpd_req_t *req)
     return ESP_OK;
 }
 
-/*esp_err_t post_handler(httpd_req_t *req)
+static bool webserver_ws_send(httpd_handle_t hd, int socket, char *data)
 {
-    ESP_LOGI(TAG, "POST");
+    httpd_ws_frame_t ws_pkt;
+    memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+    ws_pkt.payload = (uint8_t *)data;
+    ws_pkt.len = strlen(data);
+    ws_pkt.type = HTTPD_WS_TYPE_TEXT;
 
-    char content[100];
+    return (ESP_OK == httpd_ws_send_frame_async(hd, socket, &ws_pkt));
+}
 
-    size_t recv_size = MIN(req->content_len, sizeof(content));
+extern "C" esp_err_t httpd_ws_send_frame_async2(httpd_handle_t hd, int fd, httpd_ws_frame_t *frame, void *data, size_t data_len);
 
-    int ret = httpd_req_recv(req, content, recv_size);
-    if (ret <= 0)
-    {
-        if (ret == HTTPD_SOCK_ERR_TIMEOUT)
-            httpd_resp_send_408(req);
-        return ESP_FAIL;
-    }
+static bool webserver_ws_send_binary(httpd_handle_t hd, int socket, void *str, size_t str_len, void *bin, size_t bin_len)
+{
+    httpd_ws_frame_t ws_pkt;
+    memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
+    ws_pkt.payload = (uint8_t *)str;
+    ws_pkt.len = str_len + bin_len;
+    ws_pkt.type = HTTPD_WS_TYPE_BINARY;
 
-    const char resp[] = "URI POST Response";
-    httpd_resp_send(req, resp, HTTPD_RESP_USE_STRLEN);
-    return ESP_OK;
-}*/
+    return (ESP_OK == httpd_ws_send_frame_async2(hd, socket, &ws_pkt, bin, bin_len));
+}
 
 static void send_string_to_web_clients(pp_t pp, char *json)
 {
@@ -506,53 +501,11 @@ exit:
     return ESP_OK;
 }
 
-httpd_uri_t uri_get = {.uri = "/metrics", .method = HTTP_GET, .handler = get_handler, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t ws = {.uri = "/ws", .method = HTTP_GET, .handler = ws_handler, .user_ctx = NULL, .is_websocket = true, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_energyMonitor = {.uri = "/energyMonitor.html", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_vibrationAnalysisHtml = {.uri = "/vibrationAnalysis.html", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_vibrationAnalysisJs = {.uri = "/vibrationAnalysis.js", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_configSystemHtml = {.uri = "/configSystem.html", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_configSystemJs = {.uri = "/configSystem.js", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_configEmonHtml = {.uri = "/configEmon.html", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_configEmonJs = {.uri = "/configEmon.js", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_configVibrationHtml = {.uri = "/configVibration.html", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_configVibrationJs = {.uri = "/configVibration.js", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_configDiscoveryHtml = {.uri = "/configDiscovery.html", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_configDiscoveryJs = {.uri = "/configDiscovery.js", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_configModbusHtml = {.uri = "/configModbus.html", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_configModbusJs = {.uri = "/configModbus.js", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
+httpd_uri_t uri_ws = {.uri = "/ws", .method = HTTP_GET, .handler = ws_handler, .user_ctx = NULL, .is_websocket = true, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
 httpd_uri_t uri_main = {.uri = "/main.js", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_EnergyMonitorJs = {.uri = "/energyMonitor.js", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
 httpd_uri_t uri_wsclient = {.uri = "/wsclient.js", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_chart = {.uri = "/chart.min.js", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_marellogo = {.uri = "/MarelLogoNegative.png", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_bootstrapcustomcss = {.uri = "/bootstrap.custom.css", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_includejs = {.uri = "/include.js", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-httpd_uri_t uri_navbarhtml = {.uri = "/navbar.html", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
-
-bool webserver_ws_send(httpd_handle_t hd, int socket, char *data)
-{
-    httpd_ws_frame_t ws_pkt;
-    memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
-    ws_pkt.payload = (uint8_t *)data;
-    ws_pkt.len = strlen(data);
-    ws_pkt.type = HTTPD_WS_TYPE_TEXT;
-
-    return (ESP_OK == httpd_ws_send_frame_async(hd, socket, &ws_pkt));
-}
-
-extern "C" esp_err_t httpd_ws_send_frame_async2(httpd_handle_t hd, int fd, httpd_ws_frame_t *frame, void *data, size_t data_len);
-
-bool webserver_ws_send_binary(httpd_handle_t hd, int socket, void *str, size_t str_len, void *bin, size_t bin_len)
-{
-    httpd_ws_frame_t ws_pkt;
-    memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
-    ws_pkt.payload = (uint8_t *)str;
-    ws_pkt.len = str_len + bin_len;
-    ws_pkt.type = HTTPD_WS_TYPE_BINARY;
-
-    return (ESP_OK == httpd_ws_send_frame_async2(hd, socket, &ws_pkt, bin, bin_len));
-}
+httpd_uri_t uri_vibrationCtrl = {.uri = "/vibrationControl.html", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
+httpd_uri_t uri_vibrationCtrlJs = {.uri = "/vibrationControl.js", .method = HTTP_GET, .handler = get_web, .user_ctx = NULL, .is_websocket = false, .handle_ws_control_frames = false, .supported_subprotocol = NULL};
 
 static int sock_err(int sockfd)
 {
@@ -656,8 +609,8 @@ void webserver_start()
 
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.lru_purge_enable = true;
-    config.task_priority = CONFIG_MFM_MASI_WEBSERVER_TASK_PRIORITY;
-    config.max_uri_handlers = 30;
+    config.task_priority = 5;
+    config.max_uri_handlers = 6;
     config.stack_size = 512 * 40;
     config.open_fn = on_open_socket;
     config.close_fn = on_close_socket;
@@ -666,30 +619,11 @@ void webserver_start()
 
     if (httpd_start(&server, &config) == ESP_OK)
     {
-        httpd_register_uri_handler(server, &uri_get);
-        // httpd_register_uri_handler(server, &uri_post);
-        httpd_register_uri_handler(server, &ws);
-        httpd_register_uri_handler(server, &uri_energyMonitor);
-        httpd_register_uri_handler(server, &uri_vibrationAnalysisHtml);
-        httpd_register_uri_handler(server, &uri_vibrationAnalysisJs);
-        httpd_register_uri_handler(server, &uri_configSystemHtml);
-        httpd_register_uri_handler(server, &uri_configSystemJs);
-        httpd_register_uri_handler(server, &uri_configEmonHtml);
-        httpd_register_uri_handler(server, &uri_configEmonJs);
-        httpd_register_uri_handler(server, &uri_configVibrationHtml);
-        httpd_register_uri_handler(server, &uri_configVibrationJs);
-        httpd_register_uri_handler(server, &uri_configDiscoveryHtml);
-        httpd_register_uri_handler(server, &uri_configDiscoveryJs);
-        httpd_register_uri_handler(server, &uri_configModbusHtml);
-        httpd_register_uri_handler(server, &uri_configModbusJs);
+        httpd_register_uri_handler(server, &uri_ws);
         httpd_register_uri_handler(server, &uri_main);
-        httpd_register_uri_handler(server, &uri_EnergyMonitorJs);
         httpd_register_uri_handler(server, &uri_wsclient);
-        httpd_register_uri_handler(server, &uri_includejs);
-        httpd_register_uri_handler(server, &uri_navbarhtml);
-        httpd_register_uri_handler(server, &uri_chart);
-        httpd_register_uri_handler(server, &uri_marellogo);
-        httpd_register_uri_handler(server, &uri_bootstrapcustomcss);
+        httpd_register_uri_handler(server, &uri_vibrationCtrl);
+        httpd_register_uri_handler(server, &uri_vibrationCtrlJs);
     }
 
     pp_wsdata = pp_get("WsData");
